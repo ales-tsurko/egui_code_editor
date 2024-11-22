@@ -291,7 +291,7 @@ impl CodeEditor {
                             .id_source(&self.id)
                             .lock_focus(true)
                             .desired_rows(self.rows)
-                            .frame(true)
+                            .frame(false)
                             .desired_width(if self.shrink { 0.0 } else { f32::MAX })
                             .layouter(&mut layouter)
                             .show(ui);
