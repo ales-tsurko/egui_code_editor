@@ -281,7 +281,7 @@ impl CodeEditor {
                     self.numlines_show(h, text.as_str());
                 }
                 egui::ScrollArea::horizontal()
-                    .id_salt(format!("{}_inner_scroll", self.id))
+                    .id_source(format!("{}_inner_scroll", self.id))
                     .show(h, |ui| {
                         let mut layouter = |ui: &egui::Ui, string: &str, _wrap_width: f32| {
                             let layout_job = highlight(ui.ctx(), self, string);
@@ -301,7 +301,7 @@ impl CodeEditor {
         };
         if self.vscroll {
             egui::ScrollArea::vertical()
-                .id_salt(format!("{}_outer_scroll", self.id))
+                .id_source(format!("{}_outer_scroll", self.id))
                 .stick_to_bottom(self.stick_to_bottom)
                 .show(ui, code_editor);
         } else {
