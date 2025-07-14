@@ -78,7 +78,10 @@ impl Token {
                 editor.append(&mut job, &token);
             }
         }
-        editor.append(&mut job, self);
+        // FIXME fixes crash on trailining whitespace
+        if !matches!(self.ty(), TokenType::Whitespace(_)) {
+            editor.append(&mut job, self);
+        }
         job
     }
 

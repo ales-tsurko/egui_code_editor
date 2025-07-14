@@ -113,6 +113,11 @@ impl SyntaxDemo {
 }
 
 fn main() -> Result<(), eframe::Error> {
+    #[cfg(debug_assertions)]
+    {
+        std::env::set_var("RUST_BACKTRACE", "1");
+    }
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_decorations(true)
