@@ -369,7 +369,9 @@ impl CodeEditor {
 #[cfg(feature = "egui")]
 impl Editor for CodeEditor {
     fn append(&self, job: &mut LayoutJob, token: &Token) {
-        job.append(token.buffer(), 0.0, self.format(token.ty()));
+        if !token.buffer().is_empty() {
+            job.append(token.buffer(), 0.0, self.format(token.ty()));
+        }
     }
 
     fn syntax(&self) -> &Syntax {
