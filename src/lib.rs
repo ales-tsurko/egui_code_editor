@@ -67,7 +67,8 @@
 //!     }
 //! }
 //! ```
-
+#[cfg(feature = "egui")]
+mod completer;
 pub mod highlighting;
 mod syntax;
 #[cfg(test)]
@@ -78,14 +79,17 @@ mod themes;
 use egui::text::LayoutJob;
 #[cfg(feature = "egui")]
 use egui::widgets::text_edit::TextEditOutput;
+pub use highlighting::Token;
 #[cfg(feature = "egui")]
 use highlighting::highlight;
-pub use highlighting::Token;
 #[cfg(feature = "editor")]
 use std::hash::{Hash, Hasher};
 pub use syntax::{Syntax, TokenType};
 pub use themes::ColorTheme;
 pub use themes::DEFAULT_THEMES;
+
+#[cfg(feature = "egui")]
+pub use crate::completer::Completer;
 
 #[cfg(feature = "egui")]
 pub trait Editor: Hash {
@@ -123,10 +127,11 @@ impl Hash for CodeEditor {
 #[cfg(feature = "editor")]
 impl Default for CodeEditor {
     fn default() -> CodeEditor {
+        let syntax = Syntax::rust();
         CodeEditor {
             id: String::from("Code Editor"),
             theme: ColorTheme::GRUVBOX,
-            syntax: Syntax::rust(),
+            syntax,
             numlines: true,
             numlines_shift: 0,
             numlines_only_natural: false,
@@ -255,10 +260,8 @@ impl CodeEditor {
     }
 
     #[cfg(feature = "egui")]
-    pub fn format(&self, ty: TokenType) -> egui::text::TextFormat {
-        let font_id = egui::FontId::monospace(self.fontsize);
-        let color = self.theme.type_color(ty);
-        egui::text::TextFormat::simple(font_id, color)
+    pub fn format_token(&self, ty: TokenType) -> egui::text::TextFormat {
+        format_token(&self.theme, self.fontsize, ty)
     }
 
     #[cfg(feature = "egui")]
@@ -305,7 +308,7 @@ impl CodeEditor {
                     self.theme.type_color(TokenType::Comment(true)),
                 ),
             );
-            ui.fonts(|f| f.layout_job(layout_job))
+            ui.fonts_mut(|f| f.layout_job(layout_job))
         };
 
         ui.add(
@@ -318,6 +321,20 @@ impl CodeEditor {
                 .desired_width(width)
                 .layouter(&mut layouter),
         );
+    }
+
+    #[cfg(feature = "egui")]
+    /// Show Code Editor with auto-completion feature
+    pub fn show_with_completer(
+        &mut self,
+        ui: &mut egui::Ui,
+        text: &mut dyn egui::TextBuffer,
+        completer: &mut Completer,
+    ) -> TextEditOutput {
+        completer.handle_input(ui.ctx());
+        let mut editor_output = self.show(ui, text);
+        completer.show(&self.syntax, &self.theme, self.fontsize, &mut editor_output);
+        editor_output
     }
 
     #[cfg(feature = "egui")]
@@ -338,7 +355,7 @@ impl CodeEditor {
                         let mut layouter =
                             |ui: &egui::Ui, text_buffer: &dyn TextBuffer, _wrap_width: f32| {
                                 let layout_job = highlight(ui.ctx(), self, text_buffer.as_str());
-                                ui.fonts(|f| f.layout_job(layout_job))
+                                ui.fonts_mut(|f| f.layout_job(layout_job))
                             };
                         let output = egui::TextEdit::multiline(text)
                             .id_source(&self.id)
@@ -370,11 +387,18 @@ impl CodeEditor {
 impl Editor for CodeEditor {
     fn append(&self, job: &mut LayoutJob, token: &Token) {
         if !token.buffer().is_empty() {
-            job.append(token.buffer(), 0.0, self.format(token.ty()));
+            job.append(token.buffer(), 0.0, self.format_token(token.ty()));
         }
     }
 
     fn syntax(&self) -> &Syntax {
         &self.syntax
     }
+}
+
+#[cfg(feature = "egui")]
+pub fn format_token(theme: &ColorTheme, fontsize: f32, ty: TokenType) -> egui::text::TextFormat {
+    let font_id = egui::FontId::monospace(fontsize);
+    let color = theme.type_color(ty);
+    egui::text::TextFormat::simple(font_id, color)
 }

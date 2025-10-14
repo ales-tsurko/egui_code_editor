@@ -1,7 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")] // hide console window on Windows in release
 
-use eframe::{self, egui, CreationContext};
-use egui_code_editor::{self, highlighting::Token, CodeEditor, ColorTheme, Syntax};
+use eframe::{self, CreationContext, egui};
+use egui_code_editor::{self, CodeEditor, ColorTheme, Completer, Syntax, highlighting::Token};
 
 const THEMES: [ColorTheme; 8] = [
     ColorTheme::AYU,
@@ -114,7 +114,7 @@ impl SyntaxDemo {
 
 fn main() -> Result<(), eframe::Error> {
     #[cfg(debug_assertions)]
-    {
+    unsafe {
         std::env::set_var("RUST_BACKTRACE", "1");
     }
 
@@ -143,6 +143,7 @@ struct CodeEditorDemo {
     code: String,
     theme: ColorTheme,
     syntax: Syntax,
+    completer: Completer,
     example: bool,
     shift: isize,
     numlines_only_natural: bool,
@@ -154,6 +155,7 @@ impl CodeEditorDemo {
             code: rust.example.to_string(),
             theme: ColorTheme::GRUVBOX,
             syntax: rust.syntax(),
+            completer: Completer::new_with_syntax(&rust.syntax()).with_user_words(),
             example: true,
             shift: 0,
             numlines_only_natural: false,
@@ -192,6 +194,8 @@ impl eframe::App for CodeEditorDemo {
                         .clicked()
                     {
                         self.syntax = syntax.syntax();
+                        self.completer =
+                            Completer::new_with_syntax(&syntax.syntax()).with_user_words();
                         if self.example {
                             self.code = syntax.example.to_string()
                         }
@@ -206,6 +210,7 @@ impl eframe::App for CodeEditorDemo {
                 h.add(egui::DragValue::new(&mut self.shift));
                 h.checkbox(&mut self.numlines_only_natural, "Only Natural Numbering");
             });
+
             let mut editor = CodeEditor::default()
                 .id_source("code editor")
                 .with_rows(10)
@@ -216,7 +221,7 @@ impl eframe::App for CodeEditorDemo {
                 .with_numlines_shift(self.shift)
                 .with_numlines_only_natural(self.numlines_only_natural)
                 .vscroll(true);
-            editor.show(ui, &mut self.code);
+            editor.show_with_completer(ui, &mut self.code, &mut self.completer);
 
             ui.separator();
 
@@ -225,7 +230,7 @@ impl eframe::App for CodeEditorDemo {
                 .show(ui, |ui| {
                     for token in Token::default().tokens(&self.syntax, &self.code) {
                         ui.horizontal(|h| {
-                            let fmt = editor.format(token.ty());
+                            let fmt = editor.format_token(token.ty());
                             h.label(egui::text::LayoutJob::single_section(
                                 format!("{:?}", token.ty()),
                                 fmt,
