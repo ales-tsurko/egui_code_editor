@@ -1,5 +1,7 @@
 mod trie;
 
+use std::collections::BTreeSet;
+
 use crate::{ColorTheme, Syntax, Token, TokenType, format_token};
 use egui::{
     Event, Frame, Modifiers, Sense, Stroke, TextBuffer, text_edit::TextEditOutput,
@@ -42,7 +44,7 @@ pub struct Completer {
     trie_syntax: Trie,
     trie_user: Option<Trie>,
     variant_id: usize,
-    completions: Vec<String>,
+    completions: BTreeSet<String>,
 }
 
 impl Completer {
@@ -75,15 +77,14 @@ impl Completer {
             return;
         }
 
-        let mut completions_syntax = self.trie_syntax.find_completions(&self.prefix);
-        completions_syntax.reverse();
-        let mut completions_user = self
+        let completions_syntax = self.trie_syntax.find_completions(&self.prefix);
+        let completions_user = self
             .trie_user
             .as_ref()
             .map(|t| t.find_completions(&self.prefix))
             .unwrap_or_default();
-        completions_user.reverse();
-        self.completions = [completions_syntax, completions_user].concat();
+        self.completions =
+            BTreeSet::from_iter(completions_syntax.into_iter().chain(completions_user));
         if self.completions.is_empty() {
             return;
         }
@@ -106,7 +107,8 @@ impl Completer {
             } else if i.consume_key(Modifiers::NONE, egui::Key::Tab) {
                 let completion = self
                     .completions
-                    .get(self.variant_id)
+                    .iter()
+                    .nth(self.variant_id)
                     .map(String::from)
                     .unwrap_or_default();
                 i.events.push(Event::Paste(completion));
@@ -197,33 +199,49 @@ impl Completer {
                 .show(|ui| {
                     ui.response().sense = Sense::empty();
                     ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+                    let height = (fontsize
+                        + ui.style().visuals.widgets.hovered.bg_stroke.width * 2.0
+                        + ui.style().spacing.button_padding.y * 2.0
+                        + ui.style().spacing.item_spacing.y)
+                        * self.completions.len().min(10) as f32
+                        - ui.style().spacing.item_spacing.y;
+                    ui.set_height(height);
 
-                    for (i, completion) in self.completions.iter().enumerate() {
-                        let word = format!("{}{completion}", &self.prefix);
-                        let token_type = match &word {
-                            word if syntax.is_keyword(word) => TokenType::Keyword,
-                            word if syntax.is_special(word) => TokenType::Special,
-                            word if syntax.is_type(word) => TokenType::Type,
-                            _ => TokenType::Literal,
-                        };
-                        let fmt = format_token(theme, fontsize, token_type);
-                        let colored_text = egui::text::LayoutJob::single_section(word, fmt);
-                        let selected = i == self.variant_id;
-                        ui.add(
-                            egui::Button::new(colored_text)
-                                .sense(Sense::empty())
-                                .frame(true)
-                                .fill(theme.bg())
-                                .stroke(if selected {
-                                    Stroke::new(
-                                        ui.style().visuals.widgets.hovered.bg_stroke.width,
-                                        theme.type_color(TokenType::Literal),
-                                    )
-                                } else {
-                                    Stroke::NONE
-                                }),
-                        );
-                    }
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([true, true])
+                        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+                        .show(ui, |ui| {
+                            for (i, completion) in self.completions.iter().enumerate() {
+                                let word = format!("{}{completion}", &self.prefix);
+                                let token_type = match &word {
+                                    word if syntax.is_keyword(word) => TokenType::Keyword,
+                                    word if syntax.is_special(word) => TokenType::Special,
+                                    word if syntax.is_type(word) => TokenType::Type,
+                                    _ => TokenType::Literal,
+                                };
+                                let fmt = format_token(theme, fontsize, token_type);
+                                let colored_text = egui::text::LayoutJob::single_section(word, fmt);
+                                let selected = i == self.variant_id;
+
+                                let button = ui.add(
+                                    egui::Button::new(colored_text)
+                                        .sense(Sense::empty())
+                                        .frame(true)
+                                        .fill(theme.bg())
+                                        .stroke(if selected {
+                                            Stroke::new(
+                                                ui.style().visuals.widgets.hovered.bg_stroke.width,
+                                                theme.type_color(TokenType::Literal),
+                                            )
+                                        } else {
+                                            Stroke::NONE
+                                        }),
+                                );
+                                if selected {
+                                    button.scroll_to_me(None);
+                                }
+                            }
+                        });
                 });
             }
         }
