@@ -67,7 +67,8 @@
 //!     }
 //! }
 //! ```
-
+#[cfg(feature = "egui")]
+mod completer;
 pub mod highlighting;
 mod syntax;
 #[cfg(test)]
@@ -78,14 +79,17 @@ mod themes;
 use egui::text::LayoutJob;
 #[cfg(feature = "egui")]
 use egui::widgets::text_edit::TextEditOutput;
+pub use highlighting::Token;
 #[cfg(feature = "egui")]
 use highlighting::highlight;
-pub use highlighting::Token;
 #[cfg(feature = "editor")]
 use std::hash::{Hash, Hasher};
 pub use syntax::{Syntax, TokenType};
 pub use themes::ColorTheme;
 pub use themes::DEFAULT_THEMES;
+
+#[cfg(feature = "egui")]
+pub use crate::completer::Completer;
 
 #[cfg(feature = "egui")]
 pub trait Editor: Hash {
@@ -101,11 +105,13 @@ pub struct CodeEditor {
     theme: ColorTheme,
     syntax: Syntax,
     numlines: bool,
+    numlines_shift: isize,
+    numlines_only_natural: bool,
     fontsize: f32,
     rows: usize,
     vscroll: bool,
     stick_to_bottom: bool,
-    shrink: bool,
+    desired_width: f32,
 }
 
 #[cfg(feature = "editor")]
@@ -121,16 +127,19 @@ impl Hash for CodeEditor {
 #[cfg(feature = "editor")]
 impl Default for CodeEditor {
     fn default() -> CodeEditor {
+        let syntax = Syntax::rust();
         CodeEditor {
             id: String::from("Code Editor"),
             theme: ColorTheme::GRUVBOX,
-            syntax: Syntax::rust(),
+            syntax,
             numlines: true,
+            numlines_shift: 0,
+            numlines_only_natural: false,
             fontsize: 10.0,
             rows: 10,
             vscroll: true,
             stick_to_bottom: false,
-            shrink: false,
+            desired_width: f32::INFINITY,
         }
     }
 }
@@ -181,6 +190,26 @@ impl CodeEditor {
         CodeEditor { numlines, ..self }
     }
 
+    /// Shift lines numbering by this value
+    ///
+    /// **Default: 0**
+    pub fn with_numlines_shift(self, numlines_shift: isize) -> Self {
+        CodeEditor {
+            numlines_shift,
+            ..self
+        }
+    }
+
+    /// Show lines numbering only above zero, useful for enabling numbering since nth row
+    ///
+    /// **Default: false**
+    pub fn with_numlines_only_natural(self, numlines_only_natural: bool) -> Self {
+        CodeEditor {
+            numlines_only_natural,
+            ..self
+        }
+    }
+
     /// Use custom syntax for highlighting
     ///
     /// **Default: Rust**
@@ -198,7 +227,20 @@ impl CodeEditor {
     ///
     /// **Default: false**
     pub fn auto_shrink(self, shrink: bool) -> Self {
-        CodeEditor { shrink, ..self }
+        CodeEditor {
+            desired_width: if shrink { 0.0 } else { self.desired_width },
+            ..self
+        }
+    }
+
+    /// Sets the desired width of the code editor
+    ///
+    /// **Default: `f32::INFINITY`**
+    pub fn desired_width(self, width: f32) -> Self {
+        CodeEditor {
+            desired_width: width,
+            ..self
+        }
     }
 
     /// Stick to bottom
@@ -218,44 +260,55 @@ impl CodeEditor {
     }
 
     #[cfg(feature = "egui")]
-    pub fn format(&self, ty: TokenType) -> egui::text::TextFormat {
-        let font_id = egui::FontId::monospace(self.fontsize);
-        let color = self.theme.type_color(ty);
-        egui::text::TextFormat::simple(font_id, color)
+    pub fn format_token(&self, ty: TokenType) -> egui::text::TextFormat {
+        format_token(&self.theme, self.fontsize, ty)
     }
 
     #[cfg(feature = "egui")]
     fn numlines_show(&self, ui: &mut egui::Ui, text: &str) {
+        use egui::TextBuffer;
+
         let total = if text.ends_with('\n') || text.is_empty() {
             text.lines().count() + 1
         } else {
             text.lines().count()
         }
-        .max(self.rows);
-        let max_indent = total.to_string().len();
+        .max(self.rows) as isize;
+        let max_indent = total
+            .to_string()
+            .len()
+            .max(!self.numlines_only_natural as usize * self.numlines_shift.to_string().len());
         let mut counter = (1..=total)
             .map(|i| {
-                let label = i.to_string();
-                format!(
-                    "{}{label}",
-                    " ".repeat(max_indent.saturating_sub(label.len()))
-                )
+                let num = i + self.numlines_shift;
+                if num <= 0 && self.numlines_only_natural {
+                    String::new()
+                } else {
+                    let label = num.to_string();
+                    format!(
+                        "{}{label}",
+                        " ".repeat(max_indent.saturating_sub(label.len()))
+                    )
+                }
             })
             .collect::<Vec<String>>()
             .join("\n");
 
         #[allow(clippy::cast_precision_loss)]
-        let width = max_indent as f32 * self.fontsize * 0.5;
+        let width = max_indent as f32
+            * self.fontsize
+            * 0.5
+            * !(total + self.numlines_shift <= 0 && self.numlines_only_natural) as u8 as f32;
 
-        let mut layouter = |ui: &egui::Ui, string: &str, _wrap_width: f32| {
+        let mut layouter = |ui: &egui::Ui, text_buffer: &dyn TextBuffer, _wrap_width: f32| {
             let layout_job = egui::text::LayoutJob::single_section(
-                string.to_string(),
+                text_buffer.as_str().to_string(),
                 egui::TextFormat::simple(
                     egui::FontId::monospace(self.fontsize),
                     self.theme.type_color(TokenType::Comment(true)),
                 ),
             );
-            ui.fonts(|f| f.layout_job(layout_job))
+            ui.fonts_mut(|f| f.layout_job(layout_job))
         };
 
         ui.add(
@@ -271,8 +324,24 @@ impl CodeEditor {
     }
 
     #[cfg(feature = "egui")]
+    /// Show Code Editor with auto-completion feature
+    pub fn show_with_completer(
+        &mut self,
+        ui: &mut egui::Ui,
+        text: &mut dyn egui::TextBuffer,
+        completer: &mut Completer,
+    ) -> TextEditOutput {
+        completer.handle_input(ui.ctx());
+        let mut editor_output = self.show(ui, text);
+        completer.show(&self.syntax, &self.theme, self.fontsize, &mut editor_output);
+        editor_output
+    }
+
+    #[cfg(feature = "egui")]
     /// Show Code Editor
     pub fn show(&mut self, ui: &mut egui::Ui, text: &mut dyn egui::TextBuffer) -> TextEditOutput {
+        use egui::TextBuffer;
+
         let mut text_edit_output: Option<TextEditOutput> = None;
         let mut code_editor = |ui: &mut egui::Ui| {
             ui.horizontal_top(|h| {
@@ -283,16 +352,17 @@ impl CodeEditor {
                 egui::ScrollArea::horizontal()
                     .id_source(format!("{}_inner_scroll", self.id))
                     .show(h, |ui| {
-                        let mut layouter = |ui: &egui::Ui, string: &str, _wrap_width: f32| {
-                            let layout_job = highlight(ui.ctx(), self, string);
-                            ui.fonts(|f| f.layout_job(layout_job))
-                        };
+                        let mut layouter =
+                            |ui: &egui::Ui, text_buffer: &dyn TextBuffer, _wrap_width: f32| {
+                                let layout_job = highlight(ui.ctx(), self, text_buffer.as_str());
+                                ui.fonts_mut(|f| f.layout_job(layout_job))
+                            };
                         let output = egui::TextEdit::multiline(text)
                             .id_source(&self.id)
                             .lock_focus(true)
                             .desired_rows(self.rows)
                             .frame(false)
-                            .desired_width(if self.shrink { 0.0 } else { f32::MAX })
+                            .desired_width(self.desired_width)
                             .layouter(&mut layouter)
                             .show(ui);
                         text_edit_output = Some(output);
@@ -316,10 +386,19 @@ impl CodeEditor {
 #[cfg(feature = "egui")]
 impl Editor for CodeEditor {
     fn append(&self, job: &mut LayoutJob, token: &Token) {
-        job.append(token.buffer(), 0.0, self.format(token.ty()));
+        if !token.buffer().is_empty() {
+            job.append(token.buffer(), 0.0, self.format_token(token.ty()));
+        }
     }
 
     fn syntax(&self) -> &Syntax {
         &self.syntax
     }
+}
+
+#[cfg(feature = "egui")]
+pub fn format_token(theme: &ColorTheme, fontsize: f32, ty: TokenType) -> egui::text::TextFormat {
+    let font_id = egui::FontId::monospace(fontsize);
+    let color = theme.type_color(ty);
+    egui::text::TextFormat::simple(font_id, color)
 }
